@@ -12,6 +12,7 @@ import {
   Info, 
   ChevronRight, 
   AlertCircle,
+  AlertTriangle,
   FileCode,
   Globe
 } from 'lucide-react';
@@ -62,9 +63,13 @@ export default function TensorLab() {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [result, setResult] = useState<any>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [showSpinUpNotice, setShowSpinUpNotice] = useState<boolean>(false);
 
   // Active workspace tensor to inspect
   const [activeInspector, setActiveInspector] = useState<string | null>(null);
+  // Slice selectors for rank-3/4 inspector display [slice1, slice2]
+  const [inspectorSlices, setInspectorSlices] = useState<Record<string, [number, number]>>({});
 
   // Set default coordinates based on metric selection
   useEffect(() => {
@@ -81,6 +86,13 @@ export default function TensorLab() {
   const handleCalculate = async () => {
     setLoading(true);
     setError('');
+    setWarnings([]);
+    setShowSpinUpNotice(false);
+    
+    // Show a warning if the Render backend takes longer than 4 seconds (cold start indicator)
+    const spinUpTimer = setTimeout(() => {
+      setShowSpinUpNotice(true);
+    }, 4000);
     
     try {
       // Parse coordinates as numbers
@@ -131,6 +143,11 @@ export default function TensorLab() {
       });
 
       const data = await response.json();
+
+      // Surface any backend warnings regardless of success/failure
+      if (data.warnings && data.warnings.length > 0) {
+        setWarnings(data.warnings);
+      }
       
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Server calculation failed');
@@ -144,7 +161,9 @@ export default function TensorLab() {
       console.error(err);
       setError(err.message || 'Failed to connect to Julia backend server.');
     } finally {
+      clearTimeout(spinUpTimer);
       setLoading(false);
+      setShowSpinUpNotice(false);
     }
   };
 
@@ -334,7 +353,7 @@ export default function TensorLab() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 bg-slate-900/60 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-400">
             <Globe className="w-3.5 h-3.5 text-violet-400" />
-            <span className="font-mono">API: {getApiUrl()}</span>
+            <span className="font-mono">Server: julia backend</span>
           </div>
           
           <button 
@@ -798,6 +817,21 @@ export default function TensorLab() {
               <h2 className="text-sm font-semibold tracking-wide uppercase text-slate-300">Contraction Result</h2>
             </div>
 
+            {/* Backend Warnings Banner */}
+            {warnings.length > 0 && (
+              <div className="mb-4 bg-amber-950/30 border border-amber-700/40 rounded-xl p-3 flex items-start gap-3">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-xs font-bold text-amber-300 uppercase tracking-wider">Engine Warnings</span>
+                  <ul className="mt-1.5 space-y-1">
+                    {warnings.map((w, i) => (
+                      <li key={i} className="text-[11px] text-amber-200/80 font-mono leading-relaxed whitespace-pre-wrap break-words">{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
             {/* Error Message */}
             {error && (
               <div className="flex-1 flex items-center justify-center p-4">
@@ -813,9 +847,17 @@ export default function TensorLab() {
 
             {/* Loading Indicator */}
             {loading && !error && (
-              <div className="flex-1 flex flex-col items-center justify-center py-12 gap-3">
+              <div className="flex-1 flex flex-col items-center justify-center py-12 gap-4">
                 <div className="w-8 h-8 rounded-full border-2 border-violet-500/20 border-t-violet-500 animate-spin" />
                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Evaluating Tensors in Julia...</span>
+                
+                {showSpinUpNotice && (
+                  <div className="mt-2 max-w-sm bg-violet-950/40 border border-violet-850/50 rounded-xl p-3 text-center animate-pulse">
+                    <p className="text-[11px] text-violet-300 leading-relaxed">
+                      <span className="font-bold text-violet-200">Note:</span> The free-tier backend may be spinning up from its inactive sleep state. This initial load can take up to 60–90 seconds. Thanks for waiting!
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -900,60 +942,179 @@ export default function TensorLab() {
 
             {/* Inspector display */}
             <div className="flex-1 flex flex-col bg-slate-950/80 border border-slate-900 rounded-lg p-5">
-              {!loading && result && result.workspace_tensors && activeInspector && result.workspace_tensors[activeInspector] ? (
-                <div className="flex-1 flex flex-col justify-between gap-5">
-                  <div>
-                    {/* Header */}
-                    <div className="flex justify-between items-start border-b border-slate-900 pb-3 mb-4">
-                      <div>
-                        <h3 className="font-bold text-sm tracking-wide text-slate-200 uppercase flex items-center gap-1.5">
-                          <Layers className="w-4 h-4 text-violet-400" />
-                          Tensor {activeInspector} at evaluation point
-                        </h3>
-                        <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                          Indices: [
-                          {result.workspace_tensors[activeInspector].indices.map((idx: any, idxI: number) => (
-                            <span key={idxI} className="font-mono text-violet-400">
-                              {idx.is_contravariant ? '^' : '_'}{idx.name}
-                              {idxI < result.workspace_tensors[activeInspector].indices.length - 1 && ', '}
-                            </span>
-                          ))}
-                          ]
-                        </p>
-                      </div>
-                      
-                      <div className="bg-violet-950/30 border border-violet-900/40 rounded px-2.5 py-1 text-[10px] text-violet-400 font-bold uppercase tracking-wider font-mono">
-                        <KaTeX math={result.workspace_tensors[activeInspector].lhs} />
-                      </div>
-                    </div>
+              {!loading && result && result.workspace_tensors && activeInspector && result.workspace_tensors[activeInspector] ? (() => {
+                const wt = result.workspace_tensors[activeInspector];
+                const rank = wt.indices?.length ?? 0;
+                const sl = inspectorSlices[activeInspector] ?? [0, 0];
+                const slice1 = sl[0];
+                const slice2 = sl[1];
 
-                    {/* Matrix display */}
-                    <div className="bg-slate-900/30 border border-slate-900 rounded-lg p-4 flex items-center justify-center overflow-x-auto min-h-24 max-h-36">
-                      <KaTeX math={result.workspace_tensors[activeInspector].rhs} block />
-                    </div>
-                  </div>
+                // Build a 4x4 matrix slice from the flat data returned by the server
+                // For rank-3: data[s1][r][c], for rank-4: data[s1][s2][r][c]
+                const getSliceMatrix = () => {
+                  if (!wt.data) return null;
+                  if (rank === 3) {
+                    // data is a 3-d array [4][4][4] (Julia column-major, sent as nested arrays)
+                    try {
+                      return Array.from({ length: 4 }, (_, r) =>
+                        Array.from({ length: 4 }, (_, c) => {
+                          const val = wt.data[slice1]?.[r]?.[c] ?? 0;
+                          return typeof val === 'number' ? val : 0;
+                        })
+                      );
+                    } catch { return null; }
+                  } else if (rank === 4) {
+                    try {
+                      return Array.from({ length: 4 }, (_, r) =>
+                        Array.from({ length: 4 }, (_, c) => {
+                          const val = wt.data[slice1]?.[slice2]?.[r]?.[c] ?? 0;
+                          return typeof val === 'number' ? val : 0;
+                        })
+                      );
+                    } catch { return null; }
+                  }
+                  return null;
+                };
 
-                  {/* Components List */}
-                  <div>
-                    <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1">
-                      <ChevronRight className="w-3.5 h-3.5 text-violet-400" /> Non-Zero Components
-                    </h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-40 overflow-y-auto pr-1">
-                      {result.workspace_tensors[activeInspector].components && result.workspace_tensors[activeInspector].components.length > 0 ? (
-                        result.workspace_tensors[activeInspector].components.map((c: string, cI: number) => (
-                          <div key={cI} className="bg-slate-950 border border-slate-900 rounded px-2 py-1.5 text-center">
-                            <KaTeX math={c} className="text-xs font-mono" />
+                const formatNum = (v: number) => {
+                  const r = Math.round(v * 1e6) / 1e6;
+                  return Number.isInteger(r) ? String(r) : String(r);
+                };
+
+                const sliceMatrix = (rank >= 3) ? getSliceMatrix() : null;
+
+                // Build LaTeX for the slice matrix
+                const sliceMatrixLatex = sliceMatrix
+                  ? `\\begin{pmatrix} ${sliceMatrix.map(row => row.map(formatNum).join(' & ')).join(' \\\\ ')} \\end{pmatrix}`
+                  : null;
+
+                return (
+                  <div className="flex-1 flex flex-col justify-between gap-5">
+                    <div>
+                      {/* Header */}
+                      <div className="flex justify-between items-start border-b border-slate-900 pb-3 mb-4">
+                        <div>
+                          <h3 className="font-bold text-sm tracking-wide text-slate-200 uppercase flex items-center gap-1.5">
+                            <Layers className="w-4 h-4 text-violet-400" />
+                            Tensor {activeInspector} at evaluation point
+                          </h3>
+                          <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                            Indices: [
+                            {wt.indices.map((idx: any, idxI: number) => (
+                              <span key={idxI} className="font-mono text-violet-400">
+                                {idx.is_contravariant ? '^' : '_'}{idx.name}
+                                {idxI < wt.indices.length - 1 && ', '}
+                              </span>
+                            ))}
+                            ]
+                          </p>
+                        </div>
+                        
+                        <div className="bg-violet-950/30 border border-violet-900/40 rounded px-2.5 py-1 text-[10px] text-violet-400 font-bold uppercase tracking-wider font-mono">
+                          <KaTeX math={wt.lhs} />
+                        </div>
+                      </div>
+
+                      {/* Slice selectors for rank-3 (Christoffel) and rank-4 (Riemann) */}
+                      {rank === 3 && (
+                        <div className="flex items-center justify-between bg-slate-950/60 p-2 border border-slate-900/80 rounded text-xs gap-2 mb-3">
+                          <span className="text-slate-500 font-bold uppercase text-[9px] tracking-wider flex items-center gap-1">
+                            Fix 1st Index (<KaTeX math="\\lambda" />):
+                          </span>
+                          <div className="flex gap-1">
+                            {[0, 1, 2, 3].map((idxVal) => (
+                              <button
+                                key={idxVal}
+                                onClick={() => setInspectorSlices(prev => ({ ...prev, [activeInspector!]: [idxVal, sl[1]] }))}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                  slice1 === idxVal
+                                    ? 'bg-violet-950/45 text-violet-400 border-violet-900/85'
+                                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                                }`}
+                              >
+                                <KaTeX math={coordNames[idxVal] || String(idxVal)} />
+                              </button>
+                            ))}
                           </div>
-                        ))
-                      ) : (
-                        <div className="col-span-full py-4 text-center text-xs text-slate-600 font-medium">
-                          All components are zero.
                         </div>
                       )}
+
+                      {rank === 4 && (
+                        <div className="space-y-1.5 bg-slate-950/60 p-2 border border-slate-900/80 rounded text-xs mb-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500 font-bold uppercase text-[9px] tracking-wider flex items-center gap-1">
+                              Fix 1st Index (<KaTeX math="\\rho" />):
+                            </span>
+                            <div className="flex gap-1">
+                              {[0, 1, 2, 3].map((idxVal) => (
+                                <button
+                                  key={idxVal}
+                                  onClick={() => setInspectorSlices(prev => ({ ...prev, [activeInspector!]: [idxVal, sl[1]] }))}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                    slice1 === idxVal
+                                      ? 'bg-violet-950/45 text-violet-400 border-violet-900/85'
+                                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <KaTeX math={coordNames[idxVal] || String(idxVal)} />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500 font-bold uppercase text-[9px] tracking-wider flex items-center gap-1">
+                              Fix 2nd Index (<KaTeX math="\\sigma" />):
+                            </span>
+                            <div className="flex gap-1">
+                              {[0, 1, 2, 3].map((idxVal) => (
+                                <button
+                                  key={idxVal}
+                                  onClick={() => setInspectorSlices(prev => ({ ...prev, [activeInspector!]: [sl[0], idxVal] }))}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                    slice2 === idxVal
+                                      ? 'bg-violet-950/45 text-violet-400 border-violet-900/85'
+                                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <KaTeX math={coordNames[idxVal] || String(idxVal)} />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Matrix display */}
+                      <div className="bg-slate-900/30 border border-slate-900 rounded-lg p-4 flex items-center justify-center overflow-x-auto min-h-24 max-h-36">
+                        {sliceMatrixLatex
+                          ? <KaTeX math={sliceMatrixLatex} block />
+                          : <KaTeX math={wt.rhs} block />
+                        }
+                      </div>
+                    </div>
+
+                    {/* Components List */}
+                    <div>
+                      <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1">
+                        <ChevronRight className="w-3.5 h-3.5 text-violet-400" /> Non-Zero Components
+                      </h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-40 overflow-y-auto pr-1">
+                        {wt.components && wt.components.length > 0 ? (
+                          wt.components.map((c: string, cI: number) => (
+                            <div key={cI} className="bg-slate-950 border border-slate-900 rounded px-2 py-1.5 text-center">
+                              <KaTeX math={c} className="text-xs font-mono" />
+                            </div>
+                          ))
+                        ) : (
+                          <div className="col-span-full py-4 text-center text-xs text-slate-600 font-medium">
+                            All components are zero.
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ) : (
+                );
+              })() : (
                 <div className="flex-1 flex flex-col items-center justify-center text-center text-slate-600 py-12">
                   {loading ? (
                     <>
